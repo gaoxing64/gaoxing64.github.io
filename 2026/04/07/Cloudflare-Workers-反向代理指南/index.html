@@ -1,0 +1,326 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cloudflare Workers 反向代理指南 | 我的博客</title><noscript>开启JavaScript才能访问本站哦~</noscript><link rel="icon" href="/img/pwa/favicon.png"><link rel="stylesheet" href="/css/index.css?v=3.0.21"><link rel="canonical" href="https://shizhukk.com/2026/04/07/Cloudflare-Workers-%E5%8F%8D%E5%90%91%E4%BB%A3%E7%90%86%E6%8C%87%E5%8D%97/index.html"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><!-- Feature-specific CSS--><!-- aplayer--><!-- swiper--><!-- fancybox ui--><!-- katex--><!-- Open Graph--><meta name="description" content="原文来源：telegra.ph&amp;#x2F;CF-Workers-Reverse-Proxy-01-17发布时间：2026-01-17 前期准备必需条件 Cloudflare 账号 托管在 Cloudflare 上面的域名 注意事项 同一个反代建议不要给很多人用，否则流量过大可能违反 CF 的政"><!-- pwa--><meta name="apple-mobile-web-app-capable" content="我的博客"><meta name="theme-color" content="var(--efu-main)"><meta name="apple-mobile-web-app-status-bar-style" content="var(--efu-main)"><link rel="bookmark" href="/img/pwa/favicon.png"><link rel="apple-touch-icon" href="/img/pwa/favicon.png" sizes="180x180"><script>console.log(' %c Solitude %c ' + '3.0.21' + ' %c https://github.com/everfu/hexo-theme-solitude',
+    'background:#35495e ; padding: 1px; border-radius: 3px 0 0 3px;  color: #fff',
+    'background:#ff9a9a ; padding: 1px; border-radius: 0 3px 3px 0;  color: #fff',
+    'background:unset ; padding: 1px; border-radius: 0 3px 3px 0;  color: #fff')
+</script><script>(()=>{
+        const saveToLocal = {
+            set: function setWithExpiry(key, value, ttl) {
+                if (ttl === 0)
+                    return
+                const now = new Date()
+                const expiryDay = ttl * 86400000
+                const item = {
+                    value: value,
+                    expiry: now.getTime() + expiryDay
+                }
+                localStorage.setItem(key, JSON.stringify(item))
+            },
+            get: function getWithExpiry(key) {
+                const itemStr = localStorage.getItem(key)
+
+                if (!itemStr) {
+                    return undefined
+                }
+                const item = JSON.parse(itemStr)
+                const now = new Date()
+
+                if (now.getTime() > item.expiry) {
+                    localStorage.removeItem(key)
+                    return undefined
+                }
+                return item.value
+            }
+        };
+        window.utils = {
+            saveToLocal: saveToLocal,
+            getCSS: (url, id = false) => new Promise((resolve, reject) => {
+              const link = document.createElement('link')
+              link.rel = 'stylesheet'
+              link.href = url
+              if (id) link.id = id
+              link.onerror = reject
+              link.onload = link.onreadystatechange = function() {
+                const loadState = this.readyState
+                if (loadState && loadState !== 'loaded' && loadState !== 'complete') return
+                link.onload = link.onreadystatechange = null
+                resolve()
+              }
+              document.head.appendChild(link)
+            }),
+            getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+              const script = document.createElement('script')
+              script.src = url
+              script.async = true
+              script.onerror = reject
+              script.onload = script.onreadystatechange = function() {
+                const loadState = this.readyState
+                if (loadState && loadState !== 'loaded' && loadState !== 'complete') return
+                script.onload = script.onreadystatechange = null
+                resolve()
+              }
+
+              Object.keys(attr).forEach(key => {
+                script.setAttribute(key, attr[key])
+              })
+
+              document.head.appendChild(script)
+            }),
+            addGlobalFn: (key, fn, name = false, parent = window) => {
+                const globalFn = parent.globalFn || {}
+                const keyObj = globalFn[key] || {}
+
+                if (name && keyObj[name]) return
+
+                name = name || Object.keys(keyObj).length
+                keyObj[name] = fn
+                globalFn[key] = keyObj
+                parent.globalFn = globalFn
+            },
+            addEventListenerPjax: (ele, event, fn, option = false) => {
+              ele.addEventListener(event, fn, option)
+              utils.addGlobalFn('pjax', () => {
+                  ele.removeEventListener(event, fn, option)
+              })
+            },
+            diffDateFormat: (selector) => {
+                selector.forEach(item => {
+                    const date = new Date(item.getAttribute('datetime') || item.textContent);
+                    item.textContent = (date.getMonth() + 1).toString()+'/'+date.getDate().toString();
+                });
+            },
+        }
+    })()</script><!-- theme--><script>initTheme = () => {
+    let isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches
+    const cachedMode = utils.saveToLocal.get('theme');
+    if (cachedMode === undefined) {
+        const nowMode =
+            isDarkMode ? 'dark' : 'light'
+        document.documentElement.setAttribute('data-theme', nowMode);
+    } else {
+        document.documentElement.setAttribute('data-theme', cachedMode);
+    }
+    typeof rm === 'object' && rm.mode(cachedMode === 'dark' && isDarkMode)
+}
+initTheme()</script><script>const GLOBAL_CONFIG = {
+    root: '/',
+    algolia: undefined,
+    localsearch: undefined,
+    runtime: '2023-04-20 00:00:00',
+    lazyload: {
+        enable: false,
+        error: '/img/error_load.avif'
+    },
+    copyright: false,
+    highlight: {"limit":200,"expand":true,"copy":true,"syntax":"highlight.js"},
+    randomlink: false,
+    lang: {"theme":{"dark":"已切换至深色模式","light":"已切换至浅色模式"},"copy":{"success":"复制成功","error":"复制失败"},"backtop":"返回顶部","time":{"day":"天前","hour":"小时前","just":"刚刚","min":"分钟前","month":"个月前"},"day":" 天","f12":"开发者模式已打开，请遵循GPL协议。","totalk":"无需删除空行，直接输入评论即可"},
+    aside: {
+        state: {
+            morning: "✨ 早上好，新的一天开始了",
+            noon: "🍲 午餐时间",
+            afternoon: "🌞 下午好",
+            night: "早点休息",
+            goodnight: "晚安 😴",
+        },
+        witty_words: [],
+        witty_comment: {
+            prefix: '好久不见，',
+            back: '欢迎再次回来，',
+        },
+    },
+    covercolor: {
+        enable: false
+    },
+    comment: false,
+    lightbox: 'null',
+    right_menu: false,
+    translate: {"translateDelay":0,"defaultEncoding":2},
+    lure: false,
+    expire: false,
+};</script><script id="config-diff">var PAGE_CONFIG = {
+    is_post: true,
+    is_page: false,
+    is_home: false,
+    page: '',
+    toc: true,
+    comment: false,
+    ai_text: false,
+    color: false,
+}</script><meta name="generator" content="Hexo 8.1.1"></head><body id="body"><div id="console"><div class="close-btn" onclick="sco.hideConsole()"><i class="solitude fas fa-xmark"></i></div><div class="console-card-group"><div class="console-card-group-right"><div class="console-card tags" onclick="sco.hideConsole()"><div class="card-content"><div class="author-content-item-tips">标签</div><div class="author-content-item-title">寻找感兴趣的领域</div></div><div class="card-tag-cloud"><a href="/tags/Cloudflare/">Cloudflare<sup>1</sup></a><a href="/tags/Workers/">Workers<sup>1</sup></a><a href="/tags/%E5%8F%8D%E5%90%91%E4%BB%A3%E7%90%86/">反向代理<sup>1</sup></a><a href="/tags/Emby/">Emby<sup>1</sup></a></div></div><div class="console-card history" onclick="sco.hideConsole()"><ul class="card-archive-list"><li class="item"><a href="/archives/2026/04/"><span class="date">2026/04</span><div class="count-group"><span class="count">2</span><span class="unit">篇</span></div></a></li><li class="item"><a href="/archives/"><span class="date">全部文章</span><div class="count-group"><span class="count">2</span><span class="unit">篇</span></div></a></li></ul></div></div></div><div class="button-group"><div class="console-btn-item"><span class="darkmode_switchbutton" onclick="sco.switchDarkMode()" title="昼夜切换"><i class="solitude fas fa-circle-half-stroke"></i></span></div><div class="console-btn-item" id="consoleHideAside"><span class="asideSwitch" onclick="sco.switchHideAside()" title="边栏显示控制"><i class="solitude fas fa-arrows-left-right-to-line"></i></span></div></div><div class="console-mask" onclick="sco.hideConsole()"></div></div><div id="sidebar" style="zoom: 1;"><div id="menu-mask" style="display: none;"></div><div id="sidebar-menus"><div class="site-data"><div class="data-item is-center"><div class="data-item-link"><a href="/archives/"><div class="headline">文章</div><div class="length-num">2</div></a></div></div><div class="data-item is-center"><div class="data-item-link"><a href="/categories/"><div class="headline">分类</div><div class="length-num">1</div></a></div></div><div class="data-item is-center"><div class="data-item-link"><a href="/tags/"><div class="headline">标签</div><div class="length-num">4</div></a></div></div></div><span class="sidebar-menu-item-title">功能</span><div class="sidebar-menu-item"><span class="darkmode_switchbutton menu-child" onclick="sco.switchDarkMode()"><i class="solitude fas fa-circle-half-stroke"></i><span>显示模式</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><span>首页</span></a></div><div class="menus_item"><a class="site-page" href="javascript:void(0);"><span>文章</span></a><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="solitude  fas fa-folder-closed"></i><span>归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="solitude  fas fa-tags"></i><span>标签</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="javascript:void(0);"><span>我的</span></a><ul class="menus_item_child"><li><a class="site-page child" href="/about/"><i class="solitude  fas fa-user"></i><span>关于</span></a></li></ul></div></div><span class="sidebar-menu-item-title">标签</span><div class="card-tags"><div class="card-tag-cloud"><a href="/tags/Cloudflare/">Cloudflare<sup>1</sup></a><a href="/tags/Workers/">Workers<sup>1</sup></a><a href="/tags/%E5%8F%8D%E5%90%91%E4%BB%A3%E7%90%86/">反向代理<sup>1</sup></a><a href="/tags/Emby/">Emby<sup>1</sup></a></div></div></div></div><div class="post" id="body-wrap"><header class="not-top-img" id="page-header"><nav class="show" id="nav"><div id="nav-group"><div id="blog_name"><a href="/" title="返回博客主页" id="site-name"><span class="title">shizhukk</span><i class="solitude fas fa-home"></i></a></div><div id="page-name-mask"><div id="page-name"><a id="page-name-text" onclick="sco.toTop()">Cloudflare Workers 反向代理指南</a></div></div><div id="menus"><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><span>首页</span></a></div><div class="menus_item"><a class="site-page" href="javascript:void(0);"><span>文章</span></a><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="solitude  fas fa-folder-closed"></i><span>归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="solitude  fas fa-tags"></i><span>标签</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="javascript:void(0);"><span>我的</span></a><ul class="menus_item_child"><li><a class="site-page child" href="/about/"><i class="solitude  fas fa-user"></i><span>关于</span></a></li></ul></div></div></div><div id="nav-left"></div><div id="nav-right"><div class="nav-button" id="nav-totop" onclick="sco.toTop()"><a class="totopbtn"><i class="solitude fas fa-arrow-up"></i><span id="percent">0</span></a></div><div id="toggle-menu"><a class="site-page"><i class="solitude fas fa-bars"></i></a></div></div></div></nav></header><main class="layout" id="content-inner"><div id="post"><div id="post-info"><div id="post-firstinfo"><div class="meta-firstline"><a class="post-meta-original" title="该文章为原创文章，注意版权协议">原创</a><span class="post-meta-categories"><a class="post-meta-categories" href="/categories/%E6%8A%80%E6%9C%AF%E6%95%99%E7%A8%8B/">技术教程</a></span><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Cloudflare/"><span class="tags-name tags-punctuation"><i class="solitude fas fa-hashtag"></i>Cloudflare</span></a><a class="post-meta__tags" href="/tags/Workers/"><span class="tags-name tags-punctuation"><i class="solitude fas fa-hashtag"></i>Workers</span></a><a class="post-meta__tags" href="/tags/%E5%8F%8D%E5%90%91%E4%BB%A3%E7%90%86/"><span class="tags-name tags-punctuation"><i class="solitude fas fa-hashtag"></i>反向代理</span></a><a class="post-meta__tags" href="/tags/Emby/"><span class="tags-name tags-punctuation"><i class="solitude fas fa-hashtag"></i>Emby</span></a></div></div></div></div><h1 class="post-title">Cloudflare Workers 反向代理指南</h1><div id="post-meta"><div class="meta-secondline"></div></div></div><div class="post-radius-bottom"></div><article class="post-content article-container"><blockquote>
+<p>原文来源：telegra.ph&#x2F;CF-Workers-Reverse-Proxy-01-17<br>发布时间：2026-01-17</p>
+</blockquote>
+<h2 id="前期准备"><a href="#前期准备" class="headerlink" title="前期准备"></a>前期准备</h2><h3 id="必需条件"><a href="#必需条件" class="headerlink" title="必需条件"></a>必需条件</h3><ol>
+<li><strong>Cloudflare 账号</strong></li>
+<li><strong>托管在 Cloudflare 上面的域名</strong></li>
+</ol>
+<h3 id="注意事项"><a href="#注意事项" class="headerlink" title="注意事项"></a>注意事项</h3><ul>
+<li>同一个反代建议不要给很多人用，否则流量过大可能违反 CF 的政策导致被封号</li>
+<li><strong>建议小范围自用</strong></li>
+</ul>
+<h3 id="没有域名怎么办？"><a href="#没有域名怎么办？" class="headerlink" title="没有域名怎么办？"></a>没有域名怎么办？</h3><p>可以白嫖一个免费域名，参考这篇教程：<a target="_blank" rel="noopener" href="https://zhuanlan.zhihu.com/p/1932505765198926962">https://zhuanlan.zhihu.com/p/1932505765198926962</a></p>
+<hr>
+<h2 id="第一步：部署代码"><a href="#第一步：部署代码" class="headerlink" title="第一步：部署代码"></a>第一步：部署代码</h2><h3 id="1-创建-Worker"><a href="#1-创建-Worker" class="headerlink" title="1. 创建 Worker"></a>1. 创建 Worker</h3><ol>
+<li>打开 Cloudflare 面板</li>
+<li>在左侧菜单找到 <strong>Workers 和 Pages</strong></li>
+<li>点击 <strong>创建应用程序</strong></li>
+<li>模板选择 <strong>Hello World</strong></li>
+<li>开始新建一个 Worker</li>
+</ol>
+<h3 id="2-编辑代码"><a href="#2-编辑代码" class="headerlink" title="2. 编辑代码"></a>2. 编辑代码</h3><p>点击 <strong>编辑代码</strong>，将原有的代码全部删除，粘贴以下代码：</p>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">const</span> myConfig = &#123;</span><br><span class="line">  <span class="attr">target</span>: <span class="string">&#x27;https://你的 emby 地址：端口号&#x27;</span>,</span><br><span class="line">  <span class="attr">enableCors</span>: <span class="literal">true</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="keyword">export</span> <span class="keyword">default</span> &#123;</span><br><span class="line">  <span class="keyword">async</span> <span class="title function_">fetch</span>(<span class="params">req, env, ctx</span>) &#123;</span><br><span class="line">    <span class="keyword">const</span> u = <span class="keyword">new</span> <span class="title function_">URL</span>(req.<span class="property">url</span>);</span><br><span class="line">    <span class="keyword">const</span> t = <span class="keyword">new</span> <span class="title function_">URL</span>(myConfig.<span class="property">target</span>);</span><br><span class="line">    u.<span class="property">protocol</span> = t.<span class="property">protocol</span>;</span><br><span class="line">    u.<span class="property">hostname</span> = t.<span class="property">hostname</span>;</span><br><span class="line">    u.<span class="property">port</span> = t.<span class="property">port</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">const</span> h = <span class="keyword">new</span> <span class="title class_">Headers</span>(req.<span class="property">headers</span>);</span><br><span class="line">    h.<span class="title function_">set</span>(<span class="string">&#x27;Host&#x27;</span>, t.<span class="property">hostname</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (h.<span class="title function_">has</span>(<span class="string">&#x27;Referer&#x27;</span>)) h.<span class="title function_">set</span>(<span class="string">&#x27;Referer&#x27;</span>, myConfig.<span class="property">target</span>);</span><br><span class="line">    <span class="keyword">if</span> (h.<span class="title function_">has</span>(<span class="string">&#x27;Origin&#x27;</span>)) h.<span class="title function_">set</span>(<span class="string">&#x27;Origin&#x27;</span>, myConfig.<span class="property">target</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">const</span> r = <span class="keyword">new</span> <span class="title class_">Request</span>(u.<span class="title function_">toString</span>(), &#123;</span><br><span class="line">      <span class="attr">method</span>: req.<span class="property">method</span>,</span><br><span class="line">      <span class="attr">headers</span>: h,</span><br><span class="line">      <span class="attr">body</span>: req.<span class="property">body</span>,</span><br><span class="line">      <span class="attr">redirect</span>: <span class="string">&#x27;follow&#x27;</span></span><br><span class="line">    &#125;);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      <span class="keyword">const</span> res = <span class="keyword">await</span> <span class="title function_">fetch</span>(r);</span><br><span class="line">      <span class="keyword">const</span> rh = <span class="keyword">new</span> <span class="title class_">Headers</span>(res.<span class="property">headers</span>);</span><br><span class="line"></span><br><span class="line">      <span class="keyword">if</span> (myConfig.<span class="property">enableCors</span>) &#123;</span><br><span class="line">        rh.<span class="title function_">set</span>(<span class="string">&#x27;Access-Control-Allow-Origin&#x27;</span>, <span class="string">&#x27;*&#x27;</span>);</span><br><span class="line">        rh.<span class="title function_">set</span>(<span class="string">&#x27;Access-Control-Allow-Methods&#x27;</span>, <span class="string">&#x27;GET,POST,PUT,PATCH,DELETE,OPTIONS&#x27;</span>);</span><br><span class="line">        rh.<span class="title function_">set</span>(<span class="string">&#x27;Access-Control-Allow-Headers&#x27;</span>, <span class="string">&#x27;*&#x27;</span>);</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">Response</span>(res.<span class="property">body</span>, &#123;</span><br><span class="line">        <span class="attr">status</span>: res.<span class="property">status</span>,</span><br><span class="line">        <span class="attr">statusText</span>: res.<span class="property">statusText</span>,</span><br><span class="line">        <span class="attr">headers</span>: rh</span><br><span class="line">      &#125;);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (err) &#123;</span><br><span class="line">      <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">Response</span>(err.<span class="property">message</span>, &#123; <span class="attr">status</span>: <span class="number">502</span> &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<h3 id="重要修改"><a href="#重要修改" class="headerlink" title="重要修改"></a>重要修改</h3><p><strong>粘贴后，请务必修改代码顶部的 target 这一行</strong>，填入你自己想要反代的 Emby 服务器地址和端口：</p>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">target</span>: <span class="string">&#x27;https://你的 emby 地址：端口号&#x27;</span>,</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-部署"><a href="#3-部署" class="headerlink" title="3. 部署"></a>3. 部署</h3><p>点击右上角的 <strong>部署 (Deploy)</strong> 按钮保存。</p>
+<blockquote>
+<p>可选：如果你会混淆加密 JS 代码，可以自行处理一下防止被 CF 特征识别。</p>
+</blockquote>
+<hr>
+<h2 id="第二步：域名-CNAME-优选"><a href="#第二步：域名-CNAME-优选" class="headerlink" title="第二步：域名 CNAME 优选"></a>第二步：域名 CNAME 优选</h2><h3 id="1-添加-DNS-记录"><a href="#1-添加-DNS-记录" class="headerlink" title="1. 添加 DNS 记录"></a>1. 添加 DNS 记录</h3><ol>
+<li>打开你托管在 Cloudflare 的域名管理页面</li>
+<li>进入 <strong>DNS 记录</strong></li>
+<li>添加一条 <strong>CNAME 记录</strong>：</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>填写内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>名称</strong></td>
+<td>填写你想要的前缀（例如 <code>emby</code>）</td>
+</tr>
+<tr>
+<td><strong>目标</strong></td>
+<td>填写一个优选域名</td>
+</tr>
+<tr>
+<td><strong>代理状态</strong></td>
+<td><strong>务必关闭</strong>（灰色云朵）</td>
+</tr>
+</tbody></table>
+<h3 id="2-获取优选域名"><a href="#2-获取优选域名" class="headerlink" title="2. 获取优选域名"></a>2. 获取优选域名</h3><p>优选域名可以在这里选择：<strong><a target="_blank" rel="noopener" href="https://cf.090227.xyz/">https://cf.090227.xyz/</a></strong></p>
+<hr>
+<h2 id="第三步：配置路由"><a href="#第三步：配置路由" class="headerlink" title="第三步：配置路由"></a>第三步：配置路由</h2><p><strong>这是最关键的一步</strong>，让你的域名流量经过刚才创建的 Worker。</p>
+<h3 id="1-进入路由设置"><a href="#1-进入路由设置" class="headerlink" title="1. 进入路由设置"></a>1. 进入路由设置</h3><p>在你的域名管理页面左侧菜单栏，点击 <strong>Workers 路由</strong> (Workers Routes)。</p>
+<h3 id="2-添加路由"><a href="#2-添加路由" class="headerlink" title="2. 添加路由"></a>2. 添加路由</h3><ol>
+<li>点击 <strong>添加路由</strong></li>
+<li><strong>路由</strong>一栏输入：<strong>示例</strong>：<code>emby.你的域名.com/*</code><blockquote>
+<p>注意！！！一定要带上 <code>*</code></p>
+</blockquote>
+</li>
+<li><strong>Worker</strong> 一栏选择你第一步创建的那个 Worker</li>
+<li>点击 <strong>保存</strong></li>
+</ol>
+<hr>
+<h2 id="完成测试"><a href="#完成测试" class="headerlink" title="完成测试"></a>完成测试</h2><p>现在打开你在 DNS 设置的那个域名（例如 <code>https://emby.你的域名.com</code>），应该就可以直接访问你的 Emby 了，并且走的是优选线路。</p>
+<hr>
+<h2 id="重要补充"><a href="#重要补充" class="headerlink" title="重要补充"></a>重要补充</h2><h3 id="1-DNS-解析要求"><a href="#1-DNS-解析要求" class="headerlink" title="1. DNS 解析要求"></a>1. DNS 解析要求</h3><ul>
+<li>反代需要使用<strong>国内 DNS 解析</strong>，否则可能连不上</li>
+<li>如果你有同时使用代理软件，请自行添加规则，把你自己的域名走直连</li>
+<li><strong>DNS 要用国内的</strong></li>
+</ul>
+<h3 id="2-播放器配置"><a href="#2-播放器配置" class="headerlink" title="2. 播放器配置"></a>2. 播放器配置</h3><p>在播放器上，服务器端口可以不填（默认 443），也可以填以下端口：</p>
+<ul>
+<li><code>443</code></li>
+<li><code>2053</code></li>
+<li><code>2083</code></li>
+<li><code>2087</code></li>
+<li><code>2096</code></li>
+<li><code>8443</code></li>
+</ul>
+<p>使用其它端口也许可以在晚高峰提升速度（不确定）。</p>
+<h3 id="3-Hills-用户"><a href="#3-Hills-用户" class="headerlink" title="3. Hills 用户"></a>3. Hills 用户</h3><p>本方式搭建的反代，使用 Hills 的可以直接在它的服务器线路中添加。</p>
+<hr>
+<h2 id="进阶：多服务器配置"><a href="#进阶：多服务器配置" class="headerlink" title="进阶：多服务器配置"></a>进阶：多服务器配置</h2><p>如果你有多个 Emby 服务器，想要通过同一个优选域名访问（例如用 <code>/server1</code> 访问第一台，<code>/server2</code> 访问第二台），懒得每个服务器都开一个 Workers，可以使用下面的代码。</p>
+<h3 id="操作方法"><a href="#操作方法" class="headerlink" title="操作方法"></a>操作方法</h3><p>将 Worker 中的代码<strong>全部替换</strong>为以下内容，并修改顶部的配置区域：</p>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">const</span> mapCfg = &#123;</span><br><span class="line">  <span class="attr">paths</span>: &#123;</span><br><span class="line">    <span class="string">&quot;/server1&quot;</span>: <span class="string">&quot;https://你的第一台 emby 地址：端口&quot;</span>,</span><br><span class="line">    <span class="string">&quot;/server2&quot;</span>: <span class="string">&quot;https://你的第二台 emby 地址：端口&quot;</span></span><br><span class="line">  &#125;,</span><br><span class="line">  <span class="attr">main</span>: <span class="string">&quot;https://你的默认 emby 地址：端口&quot;</span>,</span><br><span class="line">  <span class="attr">cors</span>: <span class="literal">true</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="keyword">export</span> <span class="keyword">default</span> &#123;</span><br><span class="line">  <span class="keyword">async</span> <span class="title function_">fetch</span>(<span class="params">req, env, ctx</span>) &#123;</span><br><span class="line">    <span class="keyword">const</span> rawUrl = <span class="keyword">new</span> <span class="title function_">URL</span>(req.<span class="property">url</span>);</span><br><span class="line">    <span class="keyword">let</span> target = mapCfg.<span class="property">main</span>;</span><br><span class="line">    <span class="keyword">let</span> prefix = <span class="string">&quot;&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 查找匹配的路径前缀</span></span><br><span class="line">    <span class="keyword">for</span> (<span class="keyword">const</span> key <span class="keyword">in</span> mapCfg.<span class="property">paths</span>) &#123;</span><br><span class="line">      <span class="keyword">if</span> (rawUrl.<span class="property">pathname</span>.<span class="title function_">startsWith</span>(key)) &#123;</span><br><span class="line">        target = mapCfg.<span class="property">paths</span>[key];</span><br><span class="line">        prefix = key;</span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 清理路径</span></span><br><span class="line">    <span class="keyword">let</span> cleanPath = rawUrl.<span class="property">pathname</span>;</span><br><span class="line">    <span class="keyword">if</span> (prefix) &#123;</span><br><span class="line">      cleanPath = cleanPath.<span class="title function_">replace</span>(prefix, <span class="string">&#x27;&#x27;</span>);</span><br><span class="line">      <span class="keyword">if</span> (cleanPath === <span class="string">&#x27;&#x27;</span> || !cleanPath.<span class="title function_">startsWith</span>(<span class="string">&#x27;/&#x27;</span>)) &#123;</span><br><span class="line">        cleanPath = <span class="string">&#x27;/&#x27;</span> + cleanPath;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">const</span> tUrl = <span class="keyword">new</span> <span class="title function_">URL</span>(target);</span><br><span class="line">    <span class="keyword">const</span> finalUrl = <span class="keyword">new</span> <span class="title function_">URL</span>(cleanPath + rawUrl.<span class="property">search</span>, tUrl);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">const</span> h = <span class="keyword">new</span> <span class="title class_">Headers</span>(req.<span class="property">headers</span>);</span><br><span class="line">    h.<span class="title function_">set</span>(<span class="string">&#x27;Host&#x27;</span>, tUrl.<span class="property">host</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (h.<span class="title function_">has</span>(<span class="string">&#x27;Referer&#x27;</span>)) h.<span class="title function_">set</span>(<span class="string">&#x27;Referer&#x27;</span>, target);</span><br><span class="line">    <span class="keyword">if</span> (h.<span class="title function_">has</span>(<span class="string">&#x27;Origin&#x27;</span>)) h.<span class="title function_">set</span>(<span class="string">&#x27;Origin&#x27;</span>, target);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">const</span> newReq = <span class="keyword">new</span> <span class="title class_">Request</span>(finalUrl.<span class="title function_">toString</span>(), &#123;</span><br><span class="line">      <span class="attr">method</span>: req.<span class="property">method</span>,</span><br><span class="line">      <span class="attr">headers</span>: h,</span><br><span class="line">      <span class="attr">body</span>: req.<span class="property">body</span>,</span><br><span class="line">      <span class="attr">redirect</span>: <span class="string">&#x27;follow&#x27;</span></span><br><span class="line">    &#125;);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      <span class="keyword">const</span> res = <span class="keyword">await</span> <span class="title function_">fetch</span>(newReq);</span><br><span class="line">      <span class="keyword">const</span> resH = <span class="keyword">new</span> <span class="title class_">Headers</span>(res.<span class="property">headers</span>);</span><br><span class="line"></span><br><span class="line">      <span class="keyword">if</span> (mapCfg.<span class="property">cors</span>) &#123;</span><br><span class="line">        resH.<span class="title function_">set</span>(<span class="string">&#x27;Access-Control-Allow-Origin&#x27;</span>, <span class="string">&#x27;*&#x27;</span>);</span><br><span class="line">        resH.<span class="title function_">set</span>(<span class="string">&#x27;Access-Control-Allow-Methods&#x27;</span>, <span class="string">&#x27;GET, POST, PUT, PATCH, DELETE, OPTIONS&#x27;</span>);</span><br><span class="line">        resH.<span class="title function_">set</span>(<span class="string">&#x27;Access-Control-Allow-Headers&#x27;</span>, <span class="string">&#x27;*&#x27;</span>);</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">Response</span>(res.<span class="property">body</span>, &#123;</span><br><span class="line">        <span class="attr">status</span>: res.<span class="property">status</span>,</span><br><span class="line">        <span class="attr">statusText</span>: res.<span class="property">statusText</span>,</span><br><span class="line">        <span class="attr">headers</span>: resH</span><br><span class="line">      &#125;);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (err) &#123;</span><br><span class="line">      <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">Response</span>(err.<span class="property">message</span>, &#123; <span class="attr">status</span>: <span class="number">502</span> &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<h3 id="使用说明"><a href="#使用说明" class="headerlink" title="使用说明"></a>使用说明</h3><ol>
+<li><strong>修改 paths 中的内容</strong>：左边是路径前缀，右边是对应的服务器地址</li>
+<li><strong>修改 main 中的地址</strong>：这是直接访问域名（不带前缀）时连接的默认服务器</li>
+<li><strong>在 Emby 客户端填入地址时</strong>：<ul>
+<li>访问默认服务器填：<code>https://emby.你的域名.com</code></li>
+<li>访问其他服务器填：<code>https://emby.你的域名.com/server1</code>（对应代码里设置的前缀）</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2 id="提示"><a href="#提示" class="headerlink" title="提示"></a>提示</h2><blockquote>
+<p>本教程的优选域名方式也可以用于其它功能的 workers，反代代码也可以用于 emby 服务器以外的网站，想要个性化的功能可以让 AI 帮你写代码。</p>
+</blockquote>
+<hr>
+<p><em>文档更新时间：2026-03-24</em></p>
+</article><div class="post-copyright"><div class="post-copyright__author_group"><div class="post-copyright__author_img"><img class="post-copyright__author_img_front" src="/img/logo.png"></div><div class="post-copyright__author_name">shizhukk</div><div class="post-copyright__author_desc">记录生活，分享思考</div></div><div class="post-tools" id="post-tools"><div class="post-tools-left"><div id="quit-box" onclick="RemoveRewardMask()"></div></div></div><div class="post-copyright__notice"><span class="post-copyright-info">本文是原创文章，采用<a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans">CC BY-NC-SA 4.0</a>协议，完整转载请注明来自<a href="/">我的博客</a></span></div></div><div class="post-tools-right"><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Cloudflare/"><span class="tags-punctuation"><i class="solitude fas fa-hashtag"></i>Cloudflare<span class="tagsPageCount">1</span></span></a><a class="post-meta__tags" href="/tags/Workers/"><span class="tags-punctuation"><i class="solitude fas fa-hashtag"></i>Workers<span class="tagsPageCount">1</span></span></a><a class="post-meta__tags" href="/tags/%E5%8F%8D%E5%90%91%E4%BB%A3%E7%90%86/"><span class="tags-punctuation"><i class="solitude fas fa-hashtag"></i>反向代理<span class="tagsPageCount">1</span></span></a><a class="post-meta__tags" href="/tags/Emby/"><span class="tags-punctuation"><i class="solitude fas fa-hashtag"></i>Emby<span class="tagsPageCount">1</span></span></a></div></div></div><nav class="needEndHide pagination-post" id="pagination"><div class="prev-post pull-full"><a href="/2026/04/07/hello-world/"><div class="pagination-info"><div class="label">上一篇</div><div class="prev_info">Hello World</div></div></a></div></nav></div><div class="aside-content" id="aside-content"><div class="card-widget card-info"><div class="card-content"><div class="card-info-avatar is-center"><div class="top-group"><div class="sayhi" id="sayhi" onclick="sco.changeWittyWord()"></div></div></div><div class="avatar"><img alt="头像" src="/img/logo.png"></div><div class="description"></div><div class="bottom-group"><span class="left"><div class="name">shizhukk</div><div class="desc">只有迎风，风筝才能飞得更高。</div></span><div class="social-icons is-center"></div></div></div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="solitude fas fa-bars"></i><span>文章目录</span></div><div class="toc-content" id="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E6%9C%9F%E5%87%86%E5%A4%87"><span class="toc-text">前期准备</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BF%85%E9%9C%80%E6%9D%A1%E4%BB%B6"><span class="toc-text">必需条件</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A1%B9"><span class="toc-text">注意事项</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%B2%A1%E6%9C%89%E5%9F%9F%E5%90%8D%E6%80%8E%E4%B9%88%E5%8A%9E%EF%BC%9F"><span class="toc-text">没有域名怎么办？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E4%B8%80%E6%AD%A5%EF%BC%9A%E9%83%A8%E7%BD%B2%E4%BB%A3%E7%A0%81"><span class="toc-text">第一步：部署代码</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E5%88%9B%E5%BB%BA-Worker"><span class="toc-text">1. 创建 Worker</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E7%BC%96%E8%BE%91%E4%BB%A3%E7%A0%81"><span class="toc-text">2. 编辑代码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%87%8D%E8%A6%81%E4%BF%AE%E6%94%B9"><span class="toc-text">重要修改</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E9%83%A8%E7%BD%B2"><span class="toc-text">3. 部署</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E4%BA%8C%E6%AD%A5%EF%BC%9A%E5%9F%9F%E5%90%8D-CNAME-%E4%BC%98%E9%80%89"><span class="toc-text">第二步：域名 CNAME 优选</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E6%B7%BB%E5%8A%A0-DNS-%E8%AE%B0%E5%BD%95"><span class="toc-text">1. 添加 DNS 记录</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E8%8E%B7%E5%8F%96%E4%BC%98%E9%80%89%E5%9F%9F%E5%90%8D"><span class="toc-text">2. 获取优选域名</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E4%B8%89%E6%AD%A5%EF%BC%9A%E9%85%8D%E7%BD%AE%E8%B7%AF%E7%94%B1"><span class="toc-text">第三步：配置路由</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E8%BF%9B%E5%85%A5%E8%B7%AF%E7%94%B1%E8%AE%BE%E7%BD%AE"><span class="toc-text">1. 进入路由设置</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E6%B7%BB%E5%8A%A0%E8%B7%AF%E7%94%B1"><span class="toc-text">2. 添加路由</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%AE%8C%E6%88%90%E6%B5%8B%E8%AF%95"><span class="toc-text">完成测试</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%87%8D%E8%A6%81%E8%A1%A5%E5%85%85"><span class="toc-text">重要补充</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-DNS-%E8%A7%A3%E6%9E%90%E8%A6%81%E6%B1%82"><span class="toc-text">1. DNS 解析要求</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E6%92%AD%E6%94%BE%E5%99%A8%E9%85%8D%E7%BD%AE"><span class="toc-text">2. 播放器配置</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-Hills-%E7%94%A8%E6%88%B7"><span class="toc-text">3. Hills 用户</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%BF%9B%E9%98%B6%EF%BC%9A%E5%A4%9A%E6%9C%8D%E5%8A%A1%E5%99%A8%E9%85%8D%E7%BD%AE"><span class="toc-text">进阶：多服务器配置</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%93%8D%E4%BD%9C%E6%96%B9%E6%B3%95"><span class="toc-text">操作方法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E"><span class="toc-text">使用说明</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8F%90%E7%A4%BA"><span class="toc-text">提示</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="solitude fas fa-map"></i><span>最近发布</span></div><div class="aside-list"><a class="aside-list-item" href="/2026/04/07/hello-world/" title="Hello World"><div class="content"><span class="title" href="/2026/04/07/hello-world/" title="Hello World">Hello World</span></div></a><a class="aside-list-item" href="/2026/04/07/Cloudflare-Workers-%E5%8F%8D%E5%90%91%E4%BB%A3%E7%90%86%E6%8C%87%E5%8D%97/" title="Cloudflare Workers 反向代理指南"><div class="content"><span class="title" href="/2026/04/07/Cloudflare-Workers-%E5%8F%8D%E5%90%91%E4%BB%A3%E7%90%86%E6%8C%87%E5%8D%97/" title="Cloudflare Workers 反向代理指南">Cloudflare Workers 反向代理指南</span><span class="categories" href="/2026/04/07/Cloudflare-Workers-%E5%8F%8D%E5%90%91%E4%BB%A3%E7%90%86%E6%8C%87%E5%8D%97/">技术教程</span></div></a></div></div></div></div></main><footer id="footer"><div id="st-footer"></div><div id="footer-bar"><div class="footer-bar-links"><div class="footer-bar-left"><div class="copyright">© 2023 - 2026 By<a class="footer-bar-link" href="/" title="shizhukk">shizhukk</a></div><div class="beian-group"><a class="footer-bar-link" target="_blank" rel="noopener" href="https://hexo.io/" title="框架：Hexo">框架：Hexo</a><a class="footer-bar-link" target="_blank" rel="noopener" href="https://github.com/everfu/hexo-theme-solitude" title="主题：Solitude">主题：Solitude</a></div></div><div class="footer-bar-right"></div></div></div><div class="comment-barrage needEndHide"></div></footer></div><div><!-- Critical scripts loaded synchronously--><script src="/js/utils.js?v=3.0.21"></script><script src="/js/main.js?v=3.0.21"></script><!-- Non-critical scripts loaded asynchronously--><script async src="/js/third_party/waterfall.min.js?v=3.0.21"></script><script src="https://cdn.jsdelivr.net/npm/pjax@0.2.8/pjax.min.js"></script><!-- Feature-specific scripts loaded asynchronously--><script defer src="/js/tw_cn.js?v=3.0.21"></script><!-- UI enhancement scripts--><script defer src="https://cdn.jsdelivr.net/npm/node-snackbar@0.1.16/dist/snackbar.min.js"></script><!-- Music player scripts--><!-- Cover color processing scripts--><script>window.paceOptions = {
+  restartOnPushState: false
+}
+
+utils.addGlobalFn('pjaxSend', () => {
+  Pace.restart()
+}, 'pace_restart')
+</script><script src="https://cdn.jsdelivr.net/npm/pace-js@1.2.4/pace.min.js"></script><!-- Search functionality--><!-- Right menu functionality--><div class="js-pjax"></div></div><!-- pjax--><script>let pjax = null;
+
+function initPjax() {
+    if (typeof Pjax === 'undefined') {
+        console.warn('Pjax is not loaded yet, retrying...');
+        setTimeout(initPjax, 100);
+        return;
+    }
+
+    pjax = new Pjax({
+        elements: 'a:not([target="_blank"])',
+        selectors: ["title","#body-wrap","#site-config","meta[name=\"description\"]",".js-pjax","meta[property^=\"og:\"]","#config-diff",".rs_show",".rs_hide"],
+        cacheBust: false,
+        analytics: false,
+        scrollRestoration: false
+    })
+
+    // 将 pjax 实例挂载到全局
+    window.pjax = pjax;
+
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+        const newScript = document.createElement('script')
+        const content = item.text || item.textContent || item.innerHTML || ""
+        Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+        newScript.appendChild(document.createTextNode(content))
+        item.parentNode.replaceChild(newScript, item)
+    })
+
+    document.addEventListener('pjax:complete', () => {
+        window.refreshFn()
+
+        document.querySelectorAll('script[data-pjax]').forEach(item => {
+            const newScript = document.createElement('script')
+            const content = item.text || item.textContent || item.innerHTML || ""
+            Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+            newScript.appendChild(document.createTextNode(content))
+            item.parentNode.replaceChild(newScript, item)
+        })
+
+        GLOBAL_CONFIG.islazyload && window.lazyLoadInstance.update()
+
+    })
+
+    document.addEventListener('pjax:error', (e) => {
+        if (e.request.status === 404) {
+            pjax.loadUrl('/404.html')
+        }
+    })
+}
+
+// 初始化 Pjax
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initPjax);
+} else {
+    initPjax();
+}</script><!-- google adsense--></body></html>
+        <script>
+            const posts = ["2026/04/07/hello-world/","2026/04/07/Cloudflare-Workers-反向代理指南/"];
+            function toRandomPost() {
+                const randomPost = posts[Math.floor(Math.random() * posts.length)];
+                pjax.loadUrl(GLOBAL_CONFIG.root + randomPost);
+            }
+        </script>
